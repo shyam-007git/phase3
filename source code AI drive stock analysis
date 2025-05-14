@@ -1,0 +1,157 @@
+import yfinance as yf
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Download stock data (e.g., Apple)
+ticker = "AAPL"
+df = yf.download(ticker, start="2020-01-01", end="2024-12-31")
+
+print(df.tail())
+df['Close'].plot(title=f"{ticker} Closing Prices")
+plt.show()
+
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+
+# Use only the 'Close' price
+data = df[['Close']].values
+
+scaler = MinMaxScaler()
+scaled_data = scaler.fit_transform(data)
+
+# Create sequences
+X = []
+y = []
+for i in range(60, len(scaled_data)):
+    X.append(scaled_data[i-60:i, 0])
+    y.append(scaled_data[i, 0])
+
+X = np.array(X)
+y = np.array(y)
+X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+
+
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+
+model = Sequential()
+model.add(LSTM(50, return_sequences=True, input_shape=(X.shape[1], 1)))
+model.add(LSTM(50))
+model.add(Dense(1))
+
+model.compile(optimizer='adam', loss='mean_squared_error')
+model.fit(X, y, epochs=5, batch_size=32)
+
+
+predicted = model.predict(X)
+predicted_prices = scaler.inverse_transform(predicted)
+
+# Plot actual vs predicted
+plt.plot(data[60:], label="Actual Price")
+plt.plot(predicted_prices, label="Predicted Price")
+plt.title("Stock Price Prediction")
+plt.xlabel("Days")
+plt.ylabel("Price")
+plt.legend()
+plt.show()
+
+# STEP 1: Install required packages
+!pip install streamlit yfinance keras scikit-learn pyngrok --quiet
+
+# STEP 2: Add your ngrok auth token (required to host from Colab)
+!ngrok config add-authtoken 2x4HtiZdYZPZmSVtSBDDn4eyml8_v4nX8NdunK243VqTMA7Q
+
+  # Replace with your token
+
+# STEP 3: Save the upgraded multi-day prediction UI as app.py
+with open("app.py", "w") as f:
+    f.write('''
+import streamlit as st
+import yfinance as yf
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+
+st.set_page_config(page_title="📈 AI Stock Forecast", layout="centered")
+st.title("📊 Multi-Day AI Stock Forecast")
+
+ticker = st.text_input("Enter Stock Ticker (e.g., AAPL, INFY.NS)", "AAPL")
+future_date = st.date_input("📅 Select date to predict until", min_value=datetime.today() + timedelta(days=1))
+
+predict_btn = st.button("Predict")
+
+if predict_btn and ticker:
+    try:
+        df = yf.download(ticker, period="150d")
+        if df.empty or 'Close' not in df.columns:
+            st.error("Stock data not available.")
+        else:
+            st.subheader(f"📈 Recent Prices for {ticker}")
+            st.line_chart(df['Close'])
+
+            # Preprocess data
+            close_prices = df[['Close']].values
+            scaler = MinMaxScaler()
+            scaled_data = scaler.fit_transform(close_prices)
+
+            # Create training dataset
+            X_train, y_train = [], []
+            for i in range(60, len(scaled_data)):
+                X_train.append(scaled_data[i-60:i, 0])
+                y_train.append(scaled_data[i, 0])
+            X_train, y_train = np.array(X_train), np.array(y_train)
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+
+            # Build model
+            model = Sequential()
+            model.add(LSTM(50, return_sequences=False, input_shape=(60, 1)))
+            model.add(Dense(1))
+            model.compile(optimizer='adam', loss='mean_squared_error')
+            model.fit(X_train, y_train, epochs=10, batch_size=8, verbose=0)
+
+            # Multi-day prediction
+            today = datetime.today().date()
+            n_days = (future_date - today).days
+
+            last_60 = scaled_data[-60:]
+            future_preds = []
+            input_seq = last_60.reshape(1, 60, 1)
+
+            for _ in range(n_days):
+                next_pred_scaled = model.predict(input_seq, verbose=0)
+                future_preds.append(next_pred_scaled[0][0])
+                # Update input sequence
+                next_seq = np.append(input_seq[0, 1:, 0], next_pred_scaled[0][0])
+                input_seq = next_seq.reshape(1, 60, 1)
+
+            predicted_prices = scaler.inverse_transform(np.array(future_preds).reshape(-1, 1)).flatten()
+
+            # Prepare DataFrame
+            future_dates = [today + timedelta(days=i+1) for i in range(n_days)]
+            result_df = pd.DataFrame({
+                "Date": future_dates,
+                "Predicted Close Price": predicted_prices
+            })
+
+            st.subheader("🔮 Forecasted Prices")
+            st.dataframe(result_df.set_index("Date").style.format({"Predicted Close Price": "{:.2f}"}))
+            st.line_chart(result_df.set_index("Date"))
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+''')
+
+# STEP 4: Launch Streamlit app using ngrok
+import time, threading
+from pyngrok import ngrok
+
+def run():
+    !streamlit run app.py --server.headless true --server.enableCORS false > /dev/null 2>&1
+threading.Thread(target=run).start()
+time.sleep(5)
+
+url = ngrok.connect(8501)
+print(f"🔗 Open your AI Stock App: {url}")
